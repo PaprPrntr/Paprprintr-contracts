@@ -108,9 +108,10 @@ contract PAPRUSDCpoolFarmingVariant is Ownable, ReentrancyGuard {
         uint pendingDivs = getPendingDivs(account);
         //we get some PRNTR at current rate
         uint256 prntrBalBeforeSwap = IERC20(prntr).balanceOf(address(this));
-        swapToPRNTR(pendingDivs);
-        uint256 prntrBal = IERC20(prntr).balanceOf(address(this)).sub(prntrBalBeforeSwap);
+
         if (pendingDivs > 0) {
+            swapToPRNTR(pendingDivs);
+            uint256 prntrBal = IERC20(prntr).balanceOf(address(this)).sub(prntrBalBeforeSwap);
             lastDivPoints[account] = totalDivPoints;
             IERC20(prntr).safeTransfer(account, prntrBal);
             totalEarnedTokens[account] = totalEarnedTokens[account].add(pendingDivs);

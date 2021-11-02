@@ -6,16 +6,11 @@ import '@openzeppelin/contracts/access/Ownable.sol';
 import '@openzeppelin/contracts/security/ReentrancyGuard.sol';
 import '@openzeppelin/contracts/token/ERC20/ERC20.sol';
 import '@openzeppelin/contracts/token/ERC20/IERC20.sol';
-import '@openzeppelin/contracts/token/ERC20//utils/SafeERC20.sol';
+import '@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol';
 import '@openzeppelin/contracts/utils/Address.sol';
 import '@openzeppelin/contracts/utils/structs/EnumerableSet.sol';
 import '@openzeppelin/contracts/utils/math/SafeMath.sol';
 import "./interfaces/IUniswapRouterETH.sol";
-
-
-interface OldIERC20 {
-    function transfer(address, uint) external;
-}
 
 contract PAPRUSDCpoolFarmingVariant is Ownable, ReentrancyGuard {
     using SafeMath for uint;
@@ -55,14 +50,6 @@ contract PAPRUSDCpoolFarmingVariant is Ownable, ReentrancyGuard {
     uint public lastDisburseTime;
     address[] public usdcToPRNTRRoute;
 
-    constructor() public {
-        contractDeployTime = block.timestamp;
-        adminClaimableTime = contractDeployTime.add(adminCanClaimAfter);
-        lastDisburseTime = contractDeployTime;
-        usdcToPRNTRRoute = [trustedRewardTokenAddress, prntr];
-        _giveAllowances();
-    }
-
     uint public totalClaimedRewards = 0;
 
     EnumerableSet.AddressSet private holders;
@@ -79,12 +66,24 @@ contract PAPRUSDCpoolFarmingVariant is Ownable, ReentrancyGuard {
     uint public contractBalance = 0;
     uint public totalDivPoints = 0;
     uint public totalTokens = 0;
-    uint internal pointMultiplier = 1e18;
+    uint internal constant pointMultiplier = 1e18;
     uint256 public slippage;
 
+    event Slippage(uint256 slippage);
+
+    constructor() public {
+        contractDeployTime = block.timestamp;
+        adminClaimableTime = contractDeployTime.add(adminCanClaimAfter);
+        lastDisburseTime = contractDeployTime;
+        usdcToPRNTRRoute = [trustedRewardTokenAddress, prntr];
+        slippage = 99;
+        _giveAllowances();
+    }
+
     function setSlippage(uint256 _slippage) public onlyOwner {
-        require(slippage < 99, 'Too high ser');
+        require(slippage > 50, 'Too high ser');
         slippage = _slippage;
+        emit Slippage(_slippage);
     }
 
     function addContractBalance(uint amount) public onlyOwner {
@@ -93,15 +92,13 @@ contract PAPRUSDCpoolFarmingVariant is Ownable, ReentrancyGuard {
     }
     //Frontend function for users estimated PRNTR out
     function getAmountOut(uint256 _amount) public view returns (uint256 amount) {
-    uint256 amount = _amount;
-    (uint256 reserve0, uint256 reserve1, uint32 blockTimestampLast) = IUniswapV2Pair(trustedDepositTokenAddress).getReserves();
+    (uint256 reserve0, uint256 reserve1,) = IUniswapV2Pair(trustedDepositTokenAddress).getReserves();
     (uint256 amountOut) = IUniswapRouterETH(unirouter).getAmountOut(_amount, reserve1, reserve0);
     return amountOut;
     }
 
     function swapToPRNTR(uint256 _amount) internal {
-    uint256 amount = _amount;
-    (uint256 reserve0, uint256 reserve1, uint32 blockTimestampLast) = IUniswapV2Pair(trustedDepositTokenAddress).getReserves();
+    (uint256 reserve0, uint256 reserve1,) = IUniswapV2Pair(trustedDepositTokenAddress).getReserves();
     (uint256 amountOut) = IUniswapRouterETH(unirouter).getAmountOut(_amount, reserve1, reserve0);
     IUniswapRouterETH(unirouter).swapExactTokensForTokensSupportingFeeOnTransferTokens(_amount, amountOut.mul(slippage).div(100), usdcToPRNTRRoute, address(this), block.timestamp);
     }
@@ -110,10 +107,9 @@ contract PAPRUSDCpoolFarmingVariant is Ownable, ReentrancyGuard {
         disburseTokens();
         uint pendingDivs = getPendingDivs(account);
         //we get some PRNTR at current rate
-        require(pendingDivs > 0, 'Thats what she said');
+        uint256 prntrBalBeforeSwap = IERC20(prntr).balanceOf(address(this));
         swapToPRNTR(pendingDivs);
-        uint256 prntrBal = IERC20(prntr).balanceOf(address(this));
-        require(prntrBal > 0, 'Thats what he said');
+        uint256 prntrBal = IERC20(prntr).balanceOf(address(this)).sub(prntrBalBeforeSwap);
         if (pendingDivs > 0) {
             lastDivPoints[account] = totalDivPoints;
             IERC20(prntr).safeTransfer(account, prntrBal);
@@ -188,7 +184,7 @@ contract PAPRUSDCpoolFarmingVariant is Ownable, ReentrancyGuard {
     }
 
     // withdraw without caring about Rewards
-    function emergencyWithdraw(uint amountToWithdraw) public {
+    function emergencyWithdraw(uint amountToWithdraw) public nonReentrant {
         require(amountToWithdraw > 0, "Cannot withdraw 0 Tokens!");
 
         require(depositedTokens[msg.sender] >= amountToWithdraw, "Invalid amount to withdraw");
@@ -197,11 +193,10 @@ contract PAPRUSDCpoolFarmingVariant is Ownable, ReentrancyGuard {
         disburseTokens();
         lastClaimedTime[msg.sender] = block.timestamp;
         lastDivPoints[msg.sender] = totalDivPoints;
-
-        IERC20(trustedDepositTokenAddress).safeTransfer(msg.sender, amountToWithdraw);
-
         depositedTokens[msg.sender] = depositedTokens[msg.sender].sub(amountToWithdraw);
         totalTokens = totalTokens.sub(amountToWithdraw);
+
+        IERC20(trustedDepositTokenAddress).safeTransfer(msg.sender, amountToWithdraw);
 
         if (holders.contains(msg.sender) && depositedTokens[msg.sender] == 0) {
             holders.remove(msg.sender);
@@ -289,15 +284,5 @@ contract PAPRUSDCpoolFarmingVariant is Ownable, ReentrancyGuard {
         require(_tokenAddr != trustedDepositTokenAddress, "Admin cannot transfer out deposit tokens from this vault!");
         require((_tokenAddr != trustedRewardTokenAddress) || (block.timestamp > adminClaimableTime), "Admin cannot Transfer out Reward Tokens Yet!");
         IERC20(_tokenAddr).safeTransfer(_to, _amount);
-    }
-
-    // function to allow owner to claim *other* modern ERC20 tokens sent to this contract
-    function transferAnyOldERC20Token(address _tokenAddr, address _to, uint _amount) public onlyOwner {
-        // require(_tokenAddr != trustedRewardTokenAddress && _tokenAddr != trustedDepositTokenAddress, "Cannot send out reward tokens or staking tokens!");
-
-        require(_tokenAddr != trustedDepositTokenAddress, "Admin cannot transfer out deposit tokens from this vault!");
-        require((_tokenAddr != trustedRewardTokenAddress) || (block.timestamp > adminClaimableTime), "Admin cannot Transfer out Reward Tokens Yet!");
-
-        OldIERC20(_tokenAddr).transfer(_to, _amount);
     }
 }

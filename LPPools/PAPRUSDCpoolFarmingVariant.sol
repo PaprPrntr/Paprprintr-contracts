@@ -81,7 +81,7 @@ contract PAPRUSDCpoolFarmingVariant is Ownable, ReentrancyGuard {
     }
 
     function setSlippage(uint256 _slippage) public onlyOwner {
-        require(slippage > 50, 'Too high ser');
+        require(_slippage > 50, 'Too high ser');
         slippage = _slippage;
         emit Slippage(_slippage);
     }
